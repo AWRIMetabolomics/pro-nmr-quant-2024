@@ -1,12 +1,19 @@
 # NMR Pro Quant 2024 
 
+## In This Repo
+
+* `mlgrad-weighted-lr-5apr2024` - dir containing workbooks that do automated fitting for training and validation sets
+* `manual_integration_workflow_20240112` - a minority of samples will not be fitted well by automated fitting; use the manual integration workbook to manually fit these.
 
 ## Fitting
 
 Fitting the standard (colloquially known as "red") to a sample ("blue") is done at many stages: getting and using a gradient. Fitting is a 3-step process:
 1. Find the position of best fit of red (pro std) on blue (a sample). The entire fitting process is designed to fail if the score of the best fit (measured by *normalized cross-correlation score*, or normxcorr) is still too low (less than 0.8). 
 2. Get Pearson correlation of certain manually pre-selected regions of fitted red (from 1) to blue. This is to mitigate the presence of contaminants that persistently appear at known regions. 
-3. Use OLS to compute a multiplier that scales red, and additive constant that shifts red up or down.
+3. Use OLS to compute a multiplier that scales red, and additive constant that shifts red up or down, weighted by correlation from (2).
+
+Figure below shows the difference in results of OLS between not using these manually selected regions ("before"), and with ("after"):
+
 
 ## Calculating Gradient (Training Step)
 
