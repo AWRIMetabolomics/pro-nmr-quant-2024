@@ -14,6 +14,7 @@ Fitting the standard (colloquially known as "red") to a sample ("blue") is done 
 
 Figure below shows the difference in results of OLS between not using these manually selected regions ("before"), and with ("after"):
 
+![Alt text](https://github.com/AWRIMetabolomics/pro-nmr-quant-2024/blob/master/figs/before_n_after.png)
 
 ## Calculating Gradient (Training Step)
 
