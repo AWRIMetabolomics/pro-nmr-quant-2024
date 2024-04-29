@@ -11,10 +11,12 @@
 
 Fitting the standard (colloquially known as "red") to a sample ("blue") is done at many stages: getting and using a gradient. Fitting is a 3-step process:
 1. Find the position of best fit of red (pro std) on blue (a sample). The entire fitting process is designed to fail if the score of the best fit (measured by *normalized cross-correlation score*, or normxcorr) is still too low (less than 0.8). 
-2. Get Pearson correlation of certain manually pre-selected regions of fitted red (from 1) to blue. This is to mitigate the presence of contaminants that persistently appear at known regions. 
-3. Use OLS to compute a multiplier that scales red, and additive constant that shifts red up or down, weighted by correlation from (2).
+2. Get Pearson correlation of data points of each of red and blue spectra that fall within certain manually pre-selected regions. These are usually the peaks and the troughs of the proline multiplet. This is to mitigate the presence of contaminants that persistently appear at known regions. 
+3. Use linear regression to compute a multiplier that scales red, and additive constant that shifts red up or down, weighted by correlation from (2). The role of weighting linear regression by correlation is as follows:
+  * If, in that manually selected region, red and blue look extremely similar (i.e. highly correlated), that region will have more weight in the LR, i.e. more influence on the final fitted gradient and intercept.
+  * Conversely, if red and blue look different in that region (less correlated), that region will have less weight in the LR, i.e. less influence on the final fitted gradient and intercept.
 
-Figure below shows the difference in results of OLS between not using these manually selected regions ("before"), and with ("after"):
+Figure below illustrates the difference in results of OLS between not using these manually selected regions ("before"), and with ("after"). In the top row, linear regression is run (step 3) using the entire spectra. In the bottom row, linear regression is run using only the regions of the spectra which fall within the manually selected regions (gray bars). The dark line in the second row shows a sliding window of correlation of red against blue, taken across the entire spectra; this correlation series applies a weight to the linear regression. 
 
 ![Alt text](https://github.com/AWRIMetabolomics/pro-nmr-quant-2024/blob/master/figs/before_n_after.png)
 
