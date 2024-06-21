@@ -3,8 +3,8 @@ bootstrap_results_*.csv
 scratch.ipynb
 .DS_Store
 /archive_old_workflows_pre2024
+/figs
 *.html
-*.pkl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
