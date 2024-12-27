@@ -2,9 +2,11 @@
 
 ### Key Files and Folders
 
-* `mlgrad-weighted-lr-5apr2024` - dir containing workbooks that do automated fitting for training and validation sets
-* `manual_integration_workflow_20240112` - a minority of samples will not be fitted well by automated fitting; use the manual integration workbook to manually fit these.
-* `bootstrap.R` is the R script for bootstrapping, to be used on any compute environment that support multi-threaded processing. In practice, a cloud VM is easiest to use. 
+* `01-training.ipynb` -
+* `02-testing.ipynb` -
+* `manual_integration` - a minority of samples will not be fitted well by automated fitting; use the manual integration workbook to manually fit these.
+* `bootstrap.R` is the R script for bootstrapping, to be used on any compute environment that support multi-threaded processing. In practice, a cloud VM is easiest to use.
+* `bootstrap_results_12sep2023.csv` - a pre-trained example of gradient values trained from sample data, ready to be loaded into `02-testing.ipynb`
 
 # Workflow
 
@@ -28,7 +30,7 @@ For each test sample:
 
 ## Standard-to-Sample Fitting Procedure
 
-Fitting the standard (colloquially known as "red") to a sample ("blue") is a 3-step process:
+Fitting the standard to a sample is a 3-step process:
 1. Find the position of best fit of red (proline standard) on blue (a sample). The entire fitting process is designed to fail if the score of the best fit (measured by *normalized cross-correlation score*, or normxcorr) is still too low (less than 0.8). 
 2. Get Pearson correlation of data points of each of red and blue spectra that fall within certain manually pre-selected regions. These are usually the peaks and the troughs of the proline multiplet. This is to mitigate the presence of contaminants that persistently appear at known regions. 
 3. Use linear regression to compute a multiplier that scales red, and additive constant that shifts red up or down, weighted by correlation from (2). The role of weighting linear regression by correlation is as follows:
@@ -43,4 +45,4 @@ Figure below illustrates the difference in results of OLS between not using thes
 
 # Notes
 
-* The `/manual_integration...` dir is a fairly self-contained folder containing everything you need for manual integration for when auto-integration fails, but you'll have to regenerate `blue_m1_dict.pkl` everytime as input data (that is, dict of M1 multiplets where the ref peak at 0 has been adjusted to be at 0ppm). The manual integration workbook also needs the latest working versions of `nmr_fitting_funcs.py` and `nmr_targeted_utils.py`. 
+* The `/manual_integration` folder is a fairly self-contained folder containing everything you need for manual integration for when auto-integration fails, but you'll have to regenerate `blue_m1_dict.pkl` everytime as input data (that is, dict of M1 multiplets where the ref peak at 0 has been adjusted to be at 0ppm). The manual integration workbook also needs the latest working versions of `nmr_fitting_funcs.py` and `nmr_targeted_utils.py`. 

@@ -1,3 +1,4 @@
+.env
 *.pkl
 bootstrap_results_*.csv
 scratch.ipynb

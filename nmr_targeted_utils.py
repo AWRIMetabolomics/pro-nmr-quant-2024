@@ -576,210 +576,46 @@ def do_2d_std_search(query_df,
     return results_2d_dict
 
 
-def DEPRECATED_viz_enema(query_df,
-              target_df,
-              query_2d_df,
-              target_2d_df,
-              target_name,
-              results_dict,
-              results_2d_dict,
-              title_fontsize=30,
-              search_region_padding_size_1d=0.01, 
-              search_region_padding_size_2d=0.01
-             ):
-    """Plotting function to plot 1D and 2D normxcorr results, for a single std.
-    WARNING: when referencing the highest-matching location of a multiplet, we persistently select only the first matching position. This assumes that one can never find multiplet-search will never find two highest matching locations that have the exact norm_xcorr score (not a terrible assumption to make). 
-
-    PARAMS
-    ------
-    query_df: df of the query spectrum (usually the pure standard), with columns 'ppm' and 'intensity'
-    target_df: df of the target spectrum (usually the sample), with columns 'ppm' and 'intensity'
-    query_2d_df: df of the query JRES, typically of shape (n_row, 257). Not that one of the columns is the 'ppm' column.
-    target_2d_df: df of the target JRES, typically of shape (n_row, 257). Not that one of the columns is the 'ppm' column.
-    target_name: str; name of the target. Really only used for labelling purposes: plot labels, axis labels, etc.
-    results_dict: output from do_1d_std_search()
-    results_2d_dict: output from do_2d_std_search()
-    title_fontsize: int; title font size. default = 30.
-    search_region_padding_size_1d: float; 
-    search_region_padding_size_2d: float; 
-
-    RETURNS
-    -------
-    output_svg: figure as svg. 
+def resize_svg_bs4(svg_str, resize_coeff=0.25):
     """
-
-    ### =============== for >1 multiplets ===============
-    if len(results_dict.keys()) > 1:
-        fig, axarr = plt.subplots(nrows=5,
-                                  ncols=len(results_dict.keys()),
-                                  figsize=(8*len(results_dict.keys()), 25)
-                                 )
-
-        search_target_max_intensity = -1
-        for i in range(len(results_dict.keys())):
-            k = list(results_dict.keys())[i]
-
-            # ===== plot 1d =====
-            search_target = target_df.loc[(target_df["ppm"]>min(results_dict[k]["coords"])-search_region_padding_size_1d) &
-                                          (target_df["ppm"]<max(results_dict[k]["coords"])+search_region_padding_size_1d)
-                                         ].copy().reset_index(drop=True)
-            query_window = query_df.loc[(query_df["ppm"]>min(results_dict[k]["coords"])) &
-                                                  (query_df["ppm"]<max(results_dict[k]["coords"]))
-                                                 ].copy().reset_index(drop=True)
-            # autoscale to emulate norm_xcorr calculation behaviour
-            search_target_intens_normalized = (search_target.intensity.values - np.mean(search_target.intensity.values))/np.std(search_target.intensity.values)
-            query_window_intens_normalized = (query_window.intensity.values - np.mean(query_window.intensity.values))/np.std(query_window.intensity.values)
-
-            axarr[1, i].plot(search_target.ppm.values, search_target_intens_normalized, c="steelblue")
-            axarr[1, i].plot(query_window.ppm.values+max(results_dict[k]["multiplet_match_ppm"][0])-max(query_window.ppm.values), query_window_intens_normalized, c="indianred")
-            axarr[1, i].set_xlim([max(search_target.ppm.values), min(search_target.ppm.values)])
-            match_centre_ppm = max(results_dict[k]["multiplet_match_ppm"][0]) - results_dict[k]["multiplet_len_ppm"]/2
-            subtitle = f"{k}\nMax normxcorr_1d = {round(np.max(results_dict[k]['rho_ls']), 3)}"
-            subtitle += f"@{round(match_centre_ppm, 4)}"
-            if "scaling_factor_1d" in results_dict[k].keys():
-                subtitle += f"s.f.={round(results_dict[k]['scaling_factor_1d'], 3)}"
-            axarr[0, i].set_title(subtitle, fontsize=title_fontsize)
-
-            # draw a rectangle reflecting normxcorr score
-            y0 = max(results_dict[k]["multiplet_match_ppm"][0])
-            #y1 = y0 - max(results_dict[k]["multiplet_len_ppm"])
-            y1 = min(results_dict[k]["multiplet_match_ppm"][0])
-            selection_c = "#72EC8F" # green
-            if (np.max(results_dict[k]['rho_ls']) < 0.9) and (np.max(results_dict[k]['rho_ls']) >= 0.8):
-                selection_c = "#FFC01E" # orange
-            elif np.max(results_dict[k]['rho_ls']) < 0.8:
-                selection_c = "#F83A58" # red
-            axarr[1, i].axvspan(y0, y1, alpha=0.35, color=selection_c)
-
-            # ===== plot 2d =====
-            multiplet = results_2d_dict[k]["coords"]
-            query_window = query_2d_df.loc[(query_2d_df["ppm"] > min(multiplet)) & (query_2d_df["ppm"] < max(multiplet))].copy()
-            target_window = target_2d_df.loc[(target_2d_df["ppm"] > (min(multiplet)-search_region_padding_size_2d)) & (target_2d_df["ppm"] < (max(multiplet)+search_region_padding_size_2d))].copy()
-
-            query_arr = np.transpose(query_window.drop("ppm", axis=1).values)
-            target_arr = np.transpose(target_window.drop("ppm", axis=1).values)
-
-            query_border_width = int((target_arr.shape[1] - query_arr.shape[1])/2)
-            #query_display = np.zeros_like(target_arr)
-            query_display = np.ones(target_arr.shape)
-            query_display[:, query_border_width:query_border_width+query_arr.shape[1]] = query_arr
-            # Add a left- and right- border of ones
-            #query_display[:, query_border_width-1] = np.ones(query_arr.shape[0])
-            #query_display[:, query_border_width+query_arr.shape[1]+1] = np.ones(query_arr.shape[0])
-
-            axarr[2, i].imshow(query_display, aspect="auto", cmap="coolwarm")
-            axarr[3, i].imshow(target_arr, aspect="auto", cmap="coolwarm")
-            axarr[4, i].imshow(results_2d_dict[k]["rho_arr"], aspect="auto", vmin=0, vmax=1, cmap="coolwarm")
-
-            # Draw all subtitles
-            axarr[0, 0].set_ylabel("1D un-scaled", fontsize=title_fontsize)
-            axarr[1, 0].set_ylabel("1D scaled", fontsize=title_fontsize)
-            axarr[2, 0].set_ylabel("multiplet J-Res", fontsize=title_fontsize)
-            axarr[3, 0].set_ylabel(f"{target_name} J-Res", fontsize=title_fontsize)
-            axarr[4, 0].set_ylabel(f"normxcorr2", fontsize=title_fontsize)
-            subtitle = f"Max normxcorr2 = {round(np.max(results_2d_dict[k]['rho_arr']), 3)}@{round(results_2d_dict[k]['match_coords_ls_ppm'][0], 4)}"
-            axarr[4, i].set_title(subtitle, fontsize=title_fontsize)
-
-            # Draw vline where a match occurs
-            for match_coord in results_2d_dict[k]["match_coords_ls_idx"]:
-                axarr[3, i].axvline(match_coord[1], c="red")
-
-            # Set font sizes
-            for row_idx in np.arange(5):
-                axarr[row_idx, i].xaxis.set_tick_params(labelsize=20)
-                axarr[row_idx, i].yaxis.set_tick_params(labelsize=20)
-
-            if max(search_target.intensity.values) > search_target_max_intensity:
-                search_target_max_intensity = max(search_target.intensity.values)
-
-            i += 1
-
-        for i in range(len(results_dict.keys())):
-            k = list(results_dict.keys())[i]
-            search_target = target_df.loc[(target_df["ppm"]>min(results_dict[k]["coords"])-search_region_padding_size_1d) &
-                                          (target_df["ppm"]<max(results_dict[k]["coords"])+search_region_padding_size_1d)
-                                         ].copy().reset_index(drop=True)
-            axarr[0, i].plot(search_target.ppm.values, search_target.intensity.values, c="steelblue")
-            axarr[0, i].set_xlim([max(search_target.ppm.values), min(search_target.ppm.values)])
-            axarr[0, i].set_ylim([0, search_target_max_intensity*1.1])
-
-    # =============== for just 1 multiplet ===============
-    else:
-        fig, axarr = plt.subplots(nrows=4,
-                                  ncols=len(results_dict.keys()),
-                                  figsize=(8*len(results_dict.keys()), 25)
-                                 )
-
-        k = list(results_dict.keys())[0]
-        # ===== plot 1d =====
-        search_target = target_df.loc[(target_df["ppm"]>min(results_dict[k]["coords"])-search_region_padding_size_1d) &
-                                      (target_df["ppm"]<max(results_dict[k]["coords"])+search_region_padding_size_1d)
-                                     ].copy().reset_index(drop=True)
-        query_window = query_df.loc[(query_df["ppm"]>min(results_dict[k]["coords"])) &
-                                              (query_df["ppm"]<max(results_dict[k]["coords"]))
-                                             ].copy().reset_index(drop=True)
-
-        search_target_intens_normalized = (search_target.intensity.values - np.mean(search_target.intensity.values))/np.std(search_target.intensity.values)
-        query_window_intens_normalized = (query_window.intensity.values - np.mean(query_window.intensity.values))/np.std(query_window.intensity.values)
-
-        axarr[0].plot(search_target.ppm.values, search_target_intens_normalized, c="steelblue")
-        axarr[0].plot(query_window.ppm.values+max(results_dict[k]["multiplet_match_ppm"][0])-max(query_window.ppm.values), query_window_intens_normalized, c="indianred")
-        axarr[0].set_xlim([max(search_target.ppm.values), min(search_target.ppm.values)])
-
-        match_centre_ppm = max(results_dict[k]["multiplet_match_ppm"][0]) - results_dict[k]["multiplet_len_ppm"]/2
-        subtitle = f"{k}\nMax normxcorr_1d = {round(np.max(results_dict[k]['rho_ls']), 3)}"
-        subtitle += f"@{round(match_centre_ppm, 4)}"
-        if "scaling_factor_1d" in results_dict[k].keys():
-            subtitle += f"s.f.={round(results_dict[k]['scaling_factor_1d'], 3)}"
-        axarr[0].set_title(subtitle, fontsize=title_fontsize)
-
-        y0 = max(results_dict[k]["multiplet_match_ppm"][0])
-        y1 = min(results_dict[k]["multiplet_match_ppm"][0])
-        axarr[0].axvspan(y0, y1, alpha=0.5, color="#72EC8F")
-
-        # ===== plot 2d =====
-        multiplet = results_2d_dict[k]["coords"]
-        query_window = query_2d_df.loc[(query_2d_df["ppm"] > min(multiplet)) & (query_2d_df["ppm"] < max(multiplet))]
-        target_window = target_2d_df.loc[(target_2d_df["ppm"] > min(multiplet)-search_region_padding_size_2d) & (target_2d_df["ppm"] < max(multiplet)+search_region_padding_size_2d)]
-
-        query_arr = np.transpose(query_window.drop("ppm", axis=1).values)
-        target_arr = np.transpose(target_window.drop("ppm", axis=1).values)
-
-        query_border_width = int((target_arr.shape[1] - query_arr.shape[1])/2)
-        #pad query_display array on left and right so that it's the same size as target
-        query_display = np.ones(target_arr.shape)
-        query_display[:, query_border_width:query_border_width+query_arr.shape[1]] = query_arr
-
-        axarr[1].imshow(query_display, aspect="auto", cmap="coolwarm")
-        axarr[2].imshow(target_arr, aspect="auto", cmap="coolwarm")
-        #axarr[2].set_xticklabels(np.around(target_window.ppm.values[::5], 3))
-        axarr[3].imshow(results_2d_dict[k]["rho_arr"], aspect="auto", vmin=0, vmax=1, cmap="coolwarm")
-
-        # Draw all subtitles
-        axarr[1].set_ylabel("multiplet J-Res", fontsize=title_fontsize)
-        axarr[2].set_ylabel(f"{target_name} J-Res", fontsize=title_fontsize)
-        subtitle = f"Max normxcorr2 = {round(np.max(results_2d_dict[k]['rho_arr']), 3)}@{round(results_2d_dict[k]['match_coords_ls_ppm'][0], 4)}"
-        axarr[3].set_title(subtitle, fontsize=title_fontsize)
-
-        # Draw vline where a match occurs
-        for match_coord in results_2d_dict[k]["match_coords_ls_idx"]:
-            axarr[2].axvline(match_coord[1], c="red")
-
-        # Set font sizes
-        axarr[0].xaxis.set_tick_params(labelsize=20)
-        axarr[0].yaxis.set_tick_params(labelsize=20)
-        axarr[1].xaxis.set_tick_params(labelsize=20)
-        axarr[1].yaxis.set_tick_params(labelsize=20)
-        axarr[2].xaxis.set_tick_params(labelsize=20)
-        axarr[2].yaxis.set_tick_params(labelsize=20)
-
-    plt.tight_layout()
-    #plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    # save as svg
+    # common usage:
+    # plt.show() not required
+    plt.subplots_adjust(hspace=0.1, wspace=0)
     i = StringIO()
+    plt.tight_layout()
     fig.savefig(i, format="svg")
-    output_svg = i.getvalue()
+    hm_svg = i.getvalue()
+    hm_svg = resize_svg_bs4(hm_svg, resize_coeff=0.5)
     plt.close()
 
-    return output_svg
+    # add to line by line list, split by '\n'
+    c = []
+    for line in str(hm_svg).strip().split("\n"):
+        c.append(line)
+
+    # print out the list line by line:
+    with open(fn_out, "w") as f:
+        for line in c:
+            f.write(line)
+    """
+    soup = BeautifulSoup(svg_str, features="html.parser")
+
+    # Find the SVG tags
+    svg_tags = soup.find_all('svg')
+    
+    for svg_tag in svg_tags:
+        # Get the current width and height attributes
+        current_width = svg_tag.get('width')
+        current_height = svg_tag.get('height')
+    
+        if current_width is not None and current_height is not None:
+            # Convert width and height to float, multiply by 0.5
+            new_width = str(float(current_width.replace("pt", "")) * resize_coeff)
+            new_height = str(float(current_height.replace("pt", "")) * resize_coeff)
+    
+            # Update the width and height attributes
+            # does replacement in-place
+            svg_tag['width'] = new_width
+            svg_tag['height'] = new_height
+    
+    return soup
