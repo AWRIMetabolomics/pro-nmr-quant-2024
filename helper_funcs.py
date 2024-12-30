@@ -7,114 +7,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from scipy.interpolate import interp1d
-import itertools
 from scipy import integrate
 from scipy.signal import fftconvolve
 from scipy.stats import pearsonr
 from bs4 import BeautifulSoup
 
-import sys
-import os
-import time
-import json
+import math
 import re
+from sklearn.linear_model import LinearRegression
+
+import os
 from io import StringIO
-
-
-def find_exp_num(base_dir):
-    """Find the experiment number within a given NMR run, where the acqu file contains `noesy` and `1d`.
-    
-    PARAMS
-    ------
-    base_dir: str; path containing subdirs of experiment numbers like /10, /11, /13, /9999
-    
-    RETURNS
-    -------
-    matching_dirs: list of str, usually of len=1; list containing experiment numbers matching requirements. 
-    """
-    matching_dirs = []
-
-    for subdir in os.listdir(base_dir):
-        subdir_path = os.path.join(base_dir, subdir)
-
-        if os.path.isdir(subdir_path):
-            acqu_path = os.path.join(subdir_path, 'acqu')
-
-            if os.path.exists(acqu_path):
-                with open(acqu_path, 'r') as f:
-                    for line in f:
-                        if "PULPROG" in line and ("noesy" in line and "1d" in line):
-                            matching_dirs.append(subdir)
-                            break
-
-    return matching_dirs
-
-
-def get_unique_elements(my_list):
-    """Gets the unique elements from my_list, preserving order. 
-    Neither set() nor np.unique() do this natively. 
-    Assumes that duplicate values in my_list already cluster together.
-    """
-    uq_list = []
-    for val in my_list:
-        if val not in uq_list:
-            uq_list.append(val)
-    
-    return uq_list
-
-
-def get_df_auc(query_df, df_dict, results_dict, multiplets_ls, set_intensity_min_to_zero_bool=False):
-    """Get scaling factor by naive height matching and store in a df. Run after do_1d_std_search(). results_dict and df_dict need not have the same keys (samples), but all keys (samples) in results_dict.keys() must be present in df_dict.keys(). That is, df_dict can contain extra keys that won't be used. df_conc will only contained keys from results_dict. 
-    
-    PARAMS
-    ------
-    query_df: df; a single df of full std spectra, usually a std (red)
-    df_dict: dictionary of full spectra of samples, usually dict of sample spectra (blue or green), keys are sample names, values are dfs. 
-    results_dict: results from do_1d_std_search. dict is in standard k/m_k format.  
-    multiplets_ls: list of all multiplets. 
-    set_intensity_min_to_zero_bool: bool; if true, set minimum intensity to zero. 
-    
-    RETURNS
-    -------
-    df_conc: df of auc and scaling factors, for all multiplets. 
-    """
-    c = []
-    for k in list(results_dict.keys()):
-        multiplet_idx = 0
-        for multiplet_i in list(results_dict[k].keys()):
-            # get coordinates of multiplet in query and target
-            mcoords_query = multiplets_ls[multiplet_idx]
-            mcoords_target = results_dict[k][multiplet_i]["multiplet_match_ppm"][0]
-
-            # get multiplet regions of query and target
-            dt_query = query_df.loc[(query_df["ppm"]>min(mcoords_query)) & (query_df["ppm"]<max(mcoords_query))].copy()
-            dt_target = df_dict[k].copy()
-            dt_target = dt_target.loc[(dt_target["ppm"]>min(mcoords_target)) & (dt_target["ppm"]<max(mcoords_target))].copy()
-
-            # Optional: floor intensities to 0
-            if set_intensity_min_to_zero_bool:
-                temp_ls = dt_query["intensity"].values - min(dt_query["intensity"].values)
-                dt_query["intensity"] = temp_ls
-                temp_ls = dt_target["intensity"].values - min(dt_target["intensity"].values)
-                dt_target["intensity"] = temp_ls
-
-            # calc sf
-            #sf = get_scaling_factor(dt_query, dt_target, [min(mcoords_query), max(mcoords_query)]) # by height
-            sf = max(dt_query["intensity"].values)/max(dt_target["intensity"].values)
-            auc_template_fitted = integrate.simps(dt_query.intensity.values/sf)
-            auc_target = integrate.simps(dt_target.intensity.values)
-
-            # retrieve normxcorr score for reporting purposes
-            rho = max(results_dict[k][multiplet_i]["rho_ls"])
-
-            c.append([k, multiplet_i, sf, auc_template_fitted, auc_target, rho])
-
-            multiplet_idx += 1
-
-    df_auc = pd.DataFrame(data=c, columns=["sample_name", "multiplet", "scaling_factor", "auc_template_fitted", "auc_target", "normxcorr"])
-
-    return df_auc
 
 
 def adjust_to_ref_peak(df, ref_coords, tolerance_window=[0, 0], adjust_ref_peak_height_bool=False, ref_peak_target_height=1E6):
@@ -180,6 +83,61 @@ def norm_xcorr(arr1, arr2):
         norm_xcorr = numerator/denominator
 
     return norm_xcorr
+
+
+def normxcorr2(template, image, mode="full"):
+    """
+    Used in do_2d_std_search(). 
+    src: https://github.com/Sabrewarrior/normxcorr2-python/blob/master/normxcorr2.py
+    Input arrays should be floating point numbers. Based on matlab/octave normxcorr2 implementation.
+    Does normxcorr calculations to search for `template` in `image`, where `template` and `image` can be N-D arrays, N>1.
+    Not that interested in N > 2, though.
+    For some reason, this only works if nrows = 257 (i.e. J-res dimension form the rows)
+    WARN: there's a zero division error somewhere.
+    Used in 2d_std_search()
+
+    PARAMS
+    ------
+    template: N-D array of float, of template or filter you are using for cross-correlation.
+    Must be of less-then-or-equal dimensions to image.
+    Length of each dimension must be less than length of image.
+    image: N-D array of float
+    mode: Options, "full", "valid", "same"
+        full (Default): The output of fftconvolve is the full discrete linear convolution of the inputs.
+        Output size will be image size + 1/2 template size in each dimension.
+        valid: The output consists only of those elements that do not rely on the zero-padding.
+        same: The output is the same size as image, centered with respect to the ‘full’ output.
+
+    RETURNS
+    -------
+    N-D array of same dimensions as image. Size depends on mode parameter.
+    """
+    # If this happens, it is probably a mistake
+    if np.ndim(template) > np.ndim(image) or \
+            len([i for i in range(np.ndim(template)) if template.shape[i] > image.shape[i]]) > 0:
+        print("WARNING (in normxcorr2): TEMPLATE larger than IMG.")
+
+    template = template - np.mean(template)
+    image = image - np.mean(image)
+
+    a1 = np.ones(template.shape)
+    # Faster to flip up down and left right then use fftconvolve instead of scipy's correlate
+    ar = np.flipud(np.fliplr(template))
+    out = fftconvolve(image, ar.conj(), mode=mode)
+
+    image = fftconvolve(np.square(image), a1, mode=mode) - \
+            np.square(fftconvolve(image, a1, mode=mode)) / (np.prod(template.shape))
+
+    # Remove small machine precision errors after subtraction
+    image[np.where(image < 0)] = 0
+
+    template = np.sum(np.square(template))
+    out = out / np.sqrt(image * template)
+
+    # Remove any divisions by 0 or very close to 0
+    out[np.where(np.logical_not(np.isfinite(out)))] = 0
+
+    return out
 
 
 def normxcorr_1d_search_classic(red_sum_loz, blue_sum_loz):
@@ -278,8 +236,8 @@ def normxcorr_1d_fast_search(red_sum_loz, blue_sum_loz, stepsize=3, neighbourhoo
     return rho_ls, max_rho, idx_pred_1, idx_pred_2
 
 
-def normxcorr_1d_search_v2(red_sum_loz, blue_sum_loz):
-    """
+def normxcorr_1d_search_UNUSED(red_sum_loz, blue_sum_loz):
+    """Old normxcorr_1d_search function, superseded by normxcorr_1d_fast_search().
     """
     rho_ls = [] # init
     max_rho = -1
@@ -295,61 +253,6 @@ def normxcorr_1d_search_v2(red_sum_loz, blue_sum_loz):
         print("ERROR: len(template) > len(target)!")
 
     return rho_ls, max_rho
-
-
-def normxcorr2(template, image, mode="full"):
-    """
-    Used in do_2d_std_search(). 
-    src: https://github.com/Sabrewarrior/normxcorr2-python/blob/master/normxcorr2.py
-    Input arrays should be floating point numbers. Based on matlab/octave normxcorr2 implementation.
-    Does normxcorr calculations to search for `template` in `image`, where `template` and `image` can be N-D arrays, N>1.
-    Not that interested in N > 2, though.
-    For some reason, this only works if nrows = 257 (i.e. J-res dimension form the rows)
-    WARN: there's a zero division error somewhere.
-    Used in 2d_std_search()
-
-    PARAMS
-    ------
-    template: N-D array of float, of template or filter you are using for cross-correlation.
-    Must be of less-then-or-equal dimensions to image.
-    Length of each dimension must be less than length of image.
-    image: N-D array of float
-    mode: Options, "full", "valid", "same"
-        full (Default): The output of fftconvolve is the full discrete linear convolution of the inputs.
-        Output size will be image size + 1/2 template size in each dimension.
-        valid: The output consists only of those elements that do not rely on the zero-padding.
-        same: The output is the same size as image, centered with respect to the ‘full’ output.
-
-    RETURNS
-    -------
-    N-D array of same dimensions as image. Size depends on mode parameter.
-    """
-    # If this happens, it is probably a mistake
-    if np.ndim(template) > np.ndim(image) or \
-            len([i for i in range(np.ndim(template)) if template.shape[i] > image.shape[i]]) > 0:
-        print("WARNING (in normxcorr2): TEMPLATE larger than IMG.")
-
-    template = template - np.mean(template)
-    image = image - np.mean(image)
-
-    a1 = np.ones(template.shape)
-    # Faster to flip up down and left right then use fftconvolve instead of scipy's correlate
-    ar = np.flipud(np.fliplr(template))
-    out = fftconvolve(image, ar.conj(), mode=mode)
-
-    image = fftconvolve(np.square(image), a1, mode=mode) - \
-            np.square(fftconvolve(image, a1, mode=mode)) / (np.prod(template.shape))
-
-    # Remove small machine precision errors after subtraction
-    image[np.where(image < 0)] = 0
-
-    template = np.sum(np.square(template))
-    out = out / np.sqrt(image * template)
-
-    # Remove any divisions by 0 or very close to 0
-    out[np.where(np.logical_not(np.isfinite(out)))] = 0
-
-    return out
 
 
 def multiplet_match_trimming(idx_ls, multiplet_match_sep):
@@ -596,7 +499,7 @@ def resize_svg_bs4(svg_str, resize_coeff=0.25):
     # print out the list line by line:
     with open(fn_out, "w") as f:
         for line in c:
-            f.write(line)
+            f.write(line) 
     """
     soup = BeautifulSoup(svg_str, features="html.parser")
 
@@ -619,3 +522,444 @@ def resize_svg_bs4(svg_str, resize_coeff=0.25):
             svg_tag['height'] = new_height
     
     return soup
+
+
+def set_min_intensity_to_zero(df):
+    """Set minimum intensity to zero. UNTESTED, because it probably shouldn't be used. 
+    """
+    df2 = df.copy()
+    temp_ls = df2["intensity"].values - min(df2["intensity"].values)
+    df2["intensity"] = temp_ls
+    
+    return df2
+
+
+def get_starting_template(template_df, mcoords, ppm_shift):
+    """
+    PARAMS
+    ------
+    template_df: 
+    mcoords: list of len 2; multiplet coords.
+    ppm_shift: float; to be added to ppm to shift the template to the best-matched position, relative to some sample.
+    
+    RETURNS
+    -------
+    dt: 
+    """
+    intensity_init = 5E7
+
+    dt = template_df.copy()
+    dt = dt.loc[(dt["ppm"]>min(mcoords)) & (dt["ppm"]<max(mcoords))]
+    sf_constant = intensity_init/max(dt["intensity"].values)
+    temp_ls = dt.intensity.values
+    dt["intensity"] = temp_ls * sf_constant
+    temp_ls = dt["ppm"].values + ppm_shift
+    dt["ppm"] = temp_ls
+    
+    return dt
+
+
+def align_spectra_dfs(df1, df2):
+    """Aligns 2 dfs by sliding the `ppm` column of df1 over the `ppm` column of df2 until their element-wise difference is minimized.
+    Note the following:
+    * len(df1) must be <= len(d2). 
+    * Both dfs must have a `ppm` column. This will be returned as `ppm1` and `ppm2`, following input order, in the final returned df.
+    * Each df can contain any other column of any name.
+    * both dfs may be trimmed until they have the same length, since they must be merged into a final df.
+    
+    PARAMS
+    ------
+    df1: 
+    df2: 
+    
+    RETURNS
+    -------
+    dz: merged df with aligned columns.
+    """
+    # sort by ppm, ascending
+    df1 = df1.sort_values(by="ppm", ascending=True).reset_index(drop=True)
+    df2 = df2.sort_values(by="ppm", ascending=True).reset_index(drop=True)
+    ppm1 = df1["ppm"].values
+    ppm2 = df2["ppm"].values
+
+    start = max(ppm1[0], ppm2[0])
+    end = min(ppm1[-1], ppm2[-1])
+
+    dt1_out = df1.copy()
+    dt1_out = dt1_out.loc[(dt1_out["ppm"]>=start) & (dt1_out["ppm"]<=end)].rename(columns={"ppm":"ppm1", "intensity":"intensity1"}).reset_index(drop=True)
+    dt2_out = df2.copy()
+    dt2_out = dt2_out.loc[(dt2_out["ppm"]>=start) & (dt2_out["ppm"]<=end)].rename(columns={"ppm":"ppm2", "intensity":"intensity2"}).reset_index(drop=True)
+
+    # NaNs sometimes occur at the first or law row due to off-by-one errors
+    dz = pd.concat([dt1_out, dt2_out], axis=1).dropna()
+    
+    return dz
+
+
+def get_err_bounds(red_array, blue_array, start, end, iter_size, convergence_method="mse"):
+    """Iterates over red_array*sf - blue_array, and returns the first sf where err becomes positive.
+    Used to iteratively grow red_array (typically std) until it just meets blue_array (typically sample).
+
+    PARAMS
+    ------
+    red_array: array of float, usually std
+    blue_array: array of float, usually sample
+    start: float; starting value of range of scaling factors
+    end: float; ending value of range of scaling factors
+    iter_size: float; interval value of scaling factor
+    convergence_method: str; error type for iteration.
+        'bottomup': scales red to blue such that red never exceeds blue. 
+        'mse': scales red to blue such that MSE is minimized. 
+        'both': error value is a sum of bottomup and mse, with a weight, `w`, on mse. 
+
+    RETURNS
+    -------
+    err_positive_sf: float; converged scaling factor. 
+    """
+    err_is_positive_bool = False
+    err_positive_sf = start
+    
+    if convergence_method=="bottomup":
+        for sf in np.arange(start, end, iter_size):
+            # red -  blue
+            err = (red_array * sf) - blue_array
+            # replace all negative values with 0
+            err[err < 0] = 0
+
+            if np.average(err) > 0 and not err_is_positive_bool:
+                err_positive_sf = sf
+
+            if np.average(err) > 0:
+                err_is_positive_bool = True
+
+    if convergence_method=="mse":
+        # set bias factor to double error values where red > blue
+        # use bias_factor = 1.0 to do nothing
+        bias_factor = 2.0
+        err = (red_array * start) - blue_array
+        for i in range(len(err)):
+            if err[i] < 0:
+                new_val = err[i] * bias_factor
+                err[i] = new_val
+
+        mse_min = np.sum(np.square(err))
+        err_positive_sf = start
+        for sf in np.arange(start, end, iter_size):
+            err = (red_array * sf) - blue_array
+            for i in range(len(err)):
+                if err[i] < 0:
+                    new_val = err[i] * bias_factor
+                    err[i] = new_val
+            mse = np.sum(np.square(err))
+            if mse < mse_min:
+                mse_min = mse
+                err_positive_sf = sf
+    
+    if convergence_method=="both":
+        mse_err = start
+        bottomup_err = start
+        err_is_positive_bool = False
+        err_ls = []
+        w = 2.0 # coefficient to scale mse error
+        mse_min = np.sum(np.square((red_array * start) - blue_array))
+        for sf in np.arange(start, end, iter_size):
+            # get MSE error
+            mse = np.sum(np.square((red_array * sf) - blue_array))
+
+            # red -  blue
+            err = (red_array * sf) - blue_array
+            # replace all negative values with 0
+            err[err < 0] = 0
+
+            if np.average(err) > 0 and not err_is_positive_bool:
+                bottomup_err = sf
+
+            if np.average(err) > 0:
+                err_is_positive_bool = True            
+
+            total_err = bottomup_err + (w*mse_err)
+            
+    return err_positive_sf
+
+
+def fit_std_to_sample(template_df, sample_df, mcoords, ppm_shift, convergence_method="mse", set_intensity_min_to_zero_bool=False):
+    """One giant wrapper for get_starting_template(), align_spectra_dfs(), get_err_bounds(). DEFUNCT?
+    
+    PARAMS
+    ------
+    template_df: original, unshifted, full template_df. 
+    sample_df: original, unshifted, full sample_df.
+    mcoords: list of len 2; multiplet coords.
+    ppm_shift: float; added to template_df `ppm` column.
+    convergence_method: str; passed to get_err_bounds()
+    set_intensity_min_to_zero_bool: bool; whether or not to floor min intensity to zero
+    
+    RETURNS
+    -------
+    sf2: float; height scaling factor
+    auc: float; AUC of scaled template.
+    """
+    # call get_starting_template() from template
+    dt1 = get_starting_template(
+        template_df=template_df.copy(), 
+        mcoords=mcoords, 
+        ppm_shift=ppm_shift
+    )
+    
+    # extract sample
+    dt2 = sample_df.copy()
+    dt2 = dt2.loc[(dt2["ppm"]>min(mcoords)) & (dt2["ppm"]<max(mcoords))]
+
+    if set_intensity_min_to_zero_bool:
+        dt1 = set_min_intensity_to_zero(dt1)
+        dt2 = set_min_intensity_to_zero(dt2)
+    
+    # align
+    dz = align_spectra_dfs(dt1, dt2)
+    red_arr = dz["intensity1"].values
+    blue_arr = dz["intensity2"].values
+
+    # Iterate until red grows to meet blue
+    sf0 = get_err_bounds(red_arr, blue_arr, 1, 1000, 1, convergence_method=convergence_method)
+    sf1 = get_err_bounds(red_arr, blue_arr, sf0-1.0, sf0+1.0, 0.1, convergence_method=convergence_method)
+    sf2 = get_err_bounds(red_arr, blue_arr, sf1-0.1, sf1+0.1, 0.00001, convergence_method=convergence_method)
+    
+    auc = np.sum(red_arr*sf2)
+    
+    return sf2, auc
+
+
+def get_sf_range(start, end, iter_size):
+    """Generate full sf range to iterate over if start, end are float numbers which don't work well with np.arange.
+    """
+    total_num_iter = math.floor((end - start)/iter_size)
+    sf_ls = (np.arange(total_num_iter)*iter_size) + start
+    sf_ls = np.append(sf_ls, end)
+    return sf_ls
+
+
+def get_true_sf(template_df, mcoords, ppm_shift, bottomup_sf):
+    """Calculate an sf which acts on original, un-scaled template to scale to best-fit with sample
+    Intended to be used after red has already been scaled to blue in the bottom-up method.
+    Wraps get_starting_template().
+
+    PARAMS
+    ------
+    template_df: origin, un-scaled template_df
+    mcoords: list of len 2; multiplet coords.
+    ppm_shift: float;
+    bottomup_sf: float;
+
+    RETURNS
+    -------
+    sf_true: float
+    """
+    dt = get_starting_template(
+        template_df=template_df, 
+        mcoords=mcoords, 
+        ppm_shift=ppm_shift
+    )
+    temp_ls = dt["intensity"].values*bottomup_sf
+    dt["intensity"] = temp_ls
+
+    dt2 = template_df.loc[(template_df["ppm"]>min(mcoords)) & (template_df["ppm"]<max(mcoords))].copy()
+    temp_ls = dt2["ppm"].values + ppm_shift
+    dt2["ppm"] = temp_ls
+    sf_true = np.average(dt2.intensity.values/dt["intensity"].values)
+
+    return sf_true
+
+
+def get_sf_min(red_array, blue_array, sf_ls):
+    """Get the minimum MSE, and associated scaling factor, sf.
+    """
+    sf_min = sf_ls[0]
+    mse_min = np.sum((red_array * sf_ls[0]) - blue_array)
+    for sf in sf_ls:
+        mse = np.sum((red_array * sf) - blue_array)
+        if mse < mse_min:
+            mse_min = mse
+            sf_min = sf
+    return sf_min
+
+
+def get_blue_m1_dict(results_dict, df_dict, mcoords):
+    """Get pro multiplet 1 from each key (sample) in results_dict.
+
+    PARAMS
+    ------
+    results_dict: direct output from do_1d_std_search().
+    df_dict: dict of spectra dfs, where each key is the original, unshifted, full sample_df.
+    mcoords: list of len 2; multiplet coordinates.
+
+    RETURNS
+    -------
+    blue_m1_dict: dict of pro multiplet1s.
+    """
+    print("WARNING: shifting blues instead of reds in get_blue_m1_dict().")
+    blue_m1_dict = {}
+    for k in sorted(list(results_dict.keys())):
+        normxcorr = results_dict[k]['multiplet_1']["max_rho"][0]
+        ppm_shift = results_dict[k]["multiplet_1"]["ppm_shift"]
+        #mcoords = results_dict[k]["multiplet_1"]["multiplet_match_ppm"][0]
+
+        # get blue
+        dt2 = df_dict[k].copy()
+        dt2 = dt2.loc[(dt2["ppm"]>min(mcoords)) & (dt2["ppm"]<max(mcoords))].copy()
+        temp_ls = dt2["ppm"].values-ppm_shift
+        dt2["ppm"] = temp_ls
+
+        # save mult1 dfs for plotting later. Not used in this function. 
+        blue_m1_dict[k] = dt2
+
+    return blue_m1_dict
+
+
+def get_df_conc_lrmatching(results_dict, 
+                           template_df, 
+                           df_dict, 
+                           mcoords, 
+                           matching_coords_ls,
+                           corr_series_dict,
+                           min_normxcorr=0.75
+                           ):
+    """
+    PARAMS
+    ------
+    results_dict: direct output from do_1d_std_search().
+    template_df: original, unshifted, full template_df. 
+    df_dict: dict of spectra dfs, where each key is the original, unshifted, full sample_df.
+    mcoords: list of len 2; multiplet coords.
+    matching_coords_ls: list of sublists, each of len 2.
+    corr_series_dict: dict of corr dfs, direct. Every key in results_dict must be present in corr_series_dict.
+    min_normxcorr: minimum normxcorr required to do LR matching. Set to 0.0 to always attempt LR matching; will sometimes error out due to differing blue and red lengths. 
+    
+    RESULT
+    ------
+    df_conc
+    """
+    # get red
+    red_dt = template_df.loc[(template_df["ppm"]>min(mcoords)) & (template_df["ppm"]<max(mcoords))].copy()
+    
+    # run
+    c = []
+    for k in sorted(list(results_dict.keys())):
+        normxcorr = results_dict[k]['multiplet_1']["max_rho"][0]
+        ppm_shift = results_dict[k]["multiplet_1"]["ppm_shift"]
+
+        if normxcorr >= min_normxcorr:
+            # get blue
+            dt2 = df_dict[k].copy()
+            ppm_shift = results_dict[k]["multiplet_1"]["ppm_shift"]
+            dt2 = dt2.loc[(dt2["ppm"]>min(mcoords)) & (dt2["ppm"]<max(mcoords))].copy()
+            temp_ls = dt2["ppm"].values-ppm_shift
+            dt2["ppm"] = temp_ls
+
+            # get red and blue data points for LR
+            red_matching_pts_ls = []
+            blue_matching_pts_ls = []
+            corr_weights_ls = []
+            d_corr = corr_series_dict[k].copy()
+            for coords in matching_coords_ls:
+                vals = red_dt.loc[(red_dt["ppm"]>min(coords)) & (red_dt["ppm"]<max(coords))]["intensity"].values
+                red_matching_pts_ls.append(vals)
+                vals = dt2.loc[(dt2["ppm"]>min(coords)) & (dt2["ppm"]<max(coords))]["intensity"].values
+                blue_matching_pts_ls.append(vals)
+                vals = d_corr.loc[(d_corr["ppm"]>min(coords)) & (d_corr["ppm"]<max(coords))]["corr_series"].values
+                corr_weights_ls.append(vals)
+
+            # flatten red and blue_matching_pts_ls
+            red_matching_pts_ls = [item for row in red_matching_pts_ls for item in row]
+            blue_matching_pts_ls = [item for row in blue_matching_pts_ls for item in row]
+            corr_weights_ls = [item for row in corr_weights_ls for item in row]
+
+            # num of matching pts for each of blue and red must be the same
+            if len(red_matching_pts_ls) != len(blue_matching_pts_ls):
+                print(f"WARNING: len(red) != len(blue) for {k} - {len(red_matching_pts_ls)}, {len(blue_matching_pts_ls)}" )
+                print("returning -1 instead")
+                c.append([k, -1, -1, -1])
+
+            else:
+                # regress: blue = grad*red + intercept
+                # coefficients = np.polyfit(red_matching_pts_ls, 
+                #                         blue_matching_pts_ls, 
+                #                         deg=1)
+                
+                # # Extracting the slope and intercept from the coefficients
+                # slope = coefficients[0]
+                # intercept = coefficients[1]
+                
+                model = LinearRegression()
+                model.fit(np.array(red_matching_pts_ls).reshape(-1, 1), 
+                          blue_matching_pts_ls, 
+                          sample_weight=corr_weights_ls)
+                
+                intercept = model.intercept_
+                slope = model.coef_[0]
+
+                # get AUCs
+                c.append([k, np.trapz((red_dt.intensity.values*slope)+intercept), slope, intercept])
+        else:
+            print(f"normxcorr for {k} too low ({normxcorr}), returning -1 instead" )
+            c.append([k, -1, -1, -1])
+
+    df_conc = pd.DataFrame(data=c, columns=["sample_name", "auc", "slope", "intercept"])
+    
+    return df_conc
+
+
+def get_correlation_series(red_df, blue_df, 
+                           min_corr=0.2, 
+                           min_corr_replacement_value=0, 
+                           window_size_nrows=64,
+                           exponent=8
+                           ):
+    """
+    Get a sliding window of normalized cross correlation between red and blue. 
+    Red and blue arrays do not need to be of the same length, but they'll be set to the same length with align_spectra_dfs().
+    
+    PARAMS
+    ------
+    red_df: red df, normally the std
+    blue_df: blue df, normally the sample
+    min_corr: float; set all correlation values below `min_corr` to `min_corr_replacement_value`. Set both of these values to -1 to do nothing. 
+    min_corr_replacement_value: float; set all correlation values below `min_corr` to `min_corr_replacement_value`. 
+    window_size_nrows: int; window_size in terms of num_rows, not ppm.
+    exponent: int; use power of correlation series to exaggerate correlation weighting effects. Set to 1 to do nothing.
+    
+    RETURNS
+    -------
+    d_corr: dataframe with columsn `ppm` and `corr_series`.
+    """
+    # align spectra
+    dz = align_spectra_dfs(red_df, blue_df)
+    #print(f"len(dz) = len")
+    
+    # calculate sliding window of xcorr
+    correlation_series = []
+    for i in range(len(dz) - window_size_nrows + 1):
+        window1 = dz["intensity1"].values[i:i + window_size_nrows]
+        window2 = dz["intensity2"].values[i:i + window_size_nrows]
+
+        normxcorr = norm_xcorr(window1, window2)
+        correlation_series.append(normxcorr)  # Store the correlation value
+
+    # pad zeros to the left and right
+    # I have a feeling that there'll be an off-by-one error somewhere in here
+    left_zero_padding = [0]*math.floor(window_size_nrows/2)
+    right_zero_padding = [0]*(math.floor(window_size_nrows/2)-1)
+
+    correlation_series = left_zero_padding + correlation_series + right_zero_padding
+    correlation_series = np.array(correlation_series)
+    correlation_series[correlation_series < min_corr] = min_corr_replacement_value
+    
+    # create df to return
+    d_corr = pd.DataFrame({"corr_series":correlation_series, 
+                           "ppm":dz["ppm1"].values
+                          })
+    
+    # take power of corr_series to exaggerate correlation weighting effects
+    temp_ls = np.power(d_corr["corr_series"].values, exponent)
+    d_corr["corr_series"] = temp_ls
+
+    return d_corr

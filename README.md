@@ -2,8 +2,8 @@
 
 ### Key Files and Folders
 
-* `01-training.ipynb` -
-* `02-testing.ipynb` -
+* `01-training.ipynb` - to execute the training step, see below
+* `02-testing.ipynb` - to execute the testing step, see below
 * `manual_integration` - a minority of samples will not be fitted well by automated fitting; use the manual integration workbook to manually fit these.
 * `bootstrap.R` is the R script for bootstrapping, to be used on any compute environment that support multi-threaded processing. In practice, a cloud VM is easiest to use.
 * `bootstrap_results_12sep2023.csv` - a pre-trained example of gradient values trained from sample data, ready to be loaded into `02-testing.ipynb`
@@ -32,7 +32,7 @@ For each test sample:
 
 Fitting the standard to a sample is a 3-step process:
 1. Find the position of best fit of red (proline standard) on blue (a sample). The entire fitting process is designed to fail if the score of the best fit (measured by *normalized cross-correlation score*, or normxcorr) is still too low (less than 0.8). 
-2. Get Pearson correlation of data points of each of red and blue spectra that fall within certain manually pre-selected regions. These are usually the peaks and the troughs of the proline multiplet. This is to mitigate the presence of contaminants that persistently appear at known regions. 
+2. Get Pearson correlation of data points of each of red and blue spectra that fall within manually pre-selected regions. These are usually the peaks and the troughs of the proline multiplet. This is to mitigate the presence of contaminants that persistently appear at known regions. 
 3. Use linear regression to compute a multiplier that scales red, and additive constant that shifts red up or down, weighted by correlation from (2). The role of weighting linear regression by correlation is as follows:
   * If, in that manually selected region, red and blue look extremely similar (i.e. highly correlated), that region will have more weight in the LR, i.e. more influence on the final fitted gradient and intercept.
   * Conversely, if red and blue look different in that region (less correlated), that region will have less weight in the LR, i.e. less influence on the final fitted gradient and intercept.
