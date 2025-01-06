@@ -13,6 +13,10 @@
 1. Training step - fitting a calibration function based on training samples
 2. Test step - Predict AUC, and therefore concentration, of each test sample. 
 
+## Data Inputs
+
+Workbooks accept NMR data as CSV. Use [`metabodecon`](https://github.com/spang-lab/metabodecon) to convert raw data to CSV. 
+
 ## Training Step - Calculating Gradient
 
 * Training data: 33 AF IDs with to bootstrap a gradient with. Final output is a distro of gradients. 
