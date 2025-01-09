@@ -1,4 +1,4 @@
-# NMR Pro Quant 2024 
+# Quantitation of Proline in Wine Matrix by NMR
 
 ### Key Files and Folders
 
